@@ -1,0 +1,87 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <esp_now.h>
+
+#define TRIG_PIN 25
+#define ECHO_PIN 26
+
+uint8_t controllerMAC[] = {0x28, 0x37, 0x2F, 0x85, 0xB1, 0x14}; // MAC tay cầm
+
+// ===== STRUCT =====
+typedef struct {
+  int throttle;
+  int steering;
+  int max_speed;
+  int trim;
+  bool state; // HIGH = manual | LOW = auto
+} ControlData;
+
+typedef struct {
+  float distance;
+} SensorData;
+
+ControlData ctrl;
+SensorData sensor;
+
+long duration;
+float distanceCM;
+
+// ===== RECEIVE FROM CONTROLLER =====
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  if (len == sizeof(ControlData)) {
+    memcpy(&ctrl, incomingData, sizeof(ctrl));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  WiFi.mode(WIFI_STA);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    return;
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, controllerMAC, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+
+  esp_now_add_peer(&peer);
+
+  Serial.println("ESP32 XE READY");
+}
+
+void loop() {
+  if (ctrl.state == HIGH) {
+    // ===== MANUAL =====
+    Serial.println("Manual");
+    delay(300);
+    return;
+  }
+
+  // ===== AUTO MODE =====
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return;
+
+  distanceCM = duration * 0.0343 / 2.0;
+  sensor.distance = distanceCM;
+
+  esp_now_send(controllerMAC, (uint8_t*)&sensor, sizeof(sensor));
+
+  Serial.print("AUTO - Sent distance: ");
+  Serial.println(distanceCM);
+
+  delay(200);
+}
